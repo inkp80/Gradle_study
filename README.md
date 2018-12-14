@@ -25,13 +25,21 @@ A Gradle build has three distinct phases.
 ##### Initialization
 Gradle supports single and multi-project builds. During the initialization phase, Gradle determines which projects are going to take part in the build, and creates a Project instance for each of these projects.
 
+In this phase, Gradle tries to identify all the projects involved in the build process. It is very important for Gradle to know whether it's a Single-project build or a Multi-project build there are several projects to evaluate. Hence, several build scripts. Gradle looks at the settings.gradle file in order to identify the differnet projects. At the end of the inintialization phase, Gradle creates an instance of org.gradle.api.Project corresponding to each of these projects.
+
+
 ##### Configuration
 During this phase the project objects are configured. The build scripts of all projects which are part of the build are executed.
+
+During this phase, Gradle executes the build script of each project identified in the previous phase. Actually, it is very important to know that just because we say "Gradle executes the build scripts" does not mean that the Task in those build scripts are executed too. Instead, after evaluating thoes scripts as simple Groovy scripts and identify the tasks in it, Gradle builds a DAG of task objects.
+
+Configure on demend
+Ability to configure only the relevant and necessary projects during the build process. 
 
 ##### Execution
 Gradle determines the subset of the tasks, created and configured during the configuration phase, to be executed. The subset is determined by the task name arguments passed to the gradle command and the current directory. Gradle then executes each of the selected tasks.
 
-
+Gradle identifies the tasks that need to be executed based on the DAG of task objects created in the configuration phase, and executes them according to their dependency order. All the build work and activities are actually done in this phase. For example: compiling source code and generating .class files, copying files, cleaning build directory, uploading archives, archiving files etc
 
 
 ### Android Build Process
@@ -305,7 +313,39 @@ org.gradle.parallel=true
 ```
 
 ### Optimize Configuration
-Gradle build goes through 3 phases: initialization, configuration, and execution. The important thing to understand here is that configuration code always executes regardless of which tasks will run. That means any expensive work performed during configuration will slow every invocation down, even simple ones like gradle help and gradle tasks.ㄹ
+Gradle build goes through 3 phases: initialization, configuration, and execution. The important thing to understand here is that configuration code always executes regardless of which tasks will run. That means any expensive work performed during configuration will slow every invocation down, even simple ones like gradle help and gradle tasks.
+
+* Apply plugins judiciously
+Every plugin and script that you apply to a project adds to the overall configuration time. Some plugins have a greater impact than other. That doesn't meean you should avoid using plugins, but you should take care to only apply them where they're needed. For example, it's easy to apply plugins to all projects via allprojects {} or subprojects{} even if not every project needs them.
+
+
+* Statically compile tasks and plugins
+>If you build logic is co,,prised of plugins written in statically compiled JVM languages like Java or Kotlin and build scripts written using the Gradle Kotlin DSL.
+
+Plugins and occationally tasks perform work during the configuration phase. These are often written in Groovy for its concise syntax, API extensions to the JDK, and functional mehtods using closures. However, it's important to bear in mind that there is a small cost associated with method calls in dynamic Groovy. When you have a lots of method calls repeated across a lots of projects, the cost can add up.
+
+That cost can be reduced by using @CompileStatic on your Groovy classes(where possible) or writing these classes in a statically compiled language, such as Java. This only really applies to lage projects or plugins that you publish publicly(because the maybe applied to large projects by ohter users). If you do need dynamic Groovy at any point, simply use @CompileDynamic for the relevant methods.
+
+### Dependency resolution
+Software projects rely on dependency resolution to simplify the integration of third-party libraries and other dependencies into the build. This does come at a cost as Gradle has to contact remote servers to find out about these dependencies and download them where necessary. Advanced caching helps speed things up tremendously, but you still need to watch out for a few pitfalls that are discussed next.
+
+Minimize dynamic and snapshot versions
+Dynamic versions, such as "2.+", and snapshot (or chaging) versions force Gradle to contact the remote repository to find out whether there's a new version or snapshot available. By default, Gradle will only perform the check once every 24 hours, but this can be changed. Look out for cacheDynamicVersionsFor and cacheChangingModulesFor in your build files and initialization scripts in case the are set to very short periods or disabled completely. Otherwise you may be condemning your build users to frequent slower-than-normal builds rather than a single slower-than-normal build a day.
+
+* Don't resolve dependencies at configurration time
+Dependency resolution is an expensive process, both in terms of I/O and computation. Gradle reduces - and eliminates in some cases - the required network traffic through judicious caching, but there is still work it needs to do. Why is this important? Because if you trigger dependency resolution during the configuration phase, you're going to add a penalty to every build that runs.
+
+
+* Avoid unnecessary and unused dependencies
+You will sometimes encounter situations in which you're only using one or two methods or classes from a third-party library. When that happens, you should seriously consider implementing the required code yourself in the project or copying it from an open source library if that's an option for you. Remember that managing third-party libraries and their transitive dependencies adds a not insignificant cost to project maintenance as well as build times.
+
+
+### Task execution
+Different people, different builds
+Incremental build
+
+### Daemon
+
 
 
 
@@ -313,9 +353,21 @@ Gradle build goes through 3 phases: initialization, configuration, and execution
 - Hot / warm / cold swap
 
 ### Incremental build
+
+https://docs.gradle.org/current/userguide/more_about_tasks.html#sec:up_to_date_checks
+
+
 ![](/⁨Macintosh HD⁩ ▸ ⁨사용자⁩ ▸ ⁨inkyu.park⁩ ▸ ⁨데스크탑⁩/스크린샷 2018-12-13 오후 4.16.18)
 
 As our builds become increasingly more complex, we want to ensure that we don't redo any work that has already been done the last time we executed our build. This is especially important during development, when we run our builds often many times a day with just some minor changes. It would be a huge impediment to the development process if our build had to start from scratch every time. We call the idea of only doing the minimum amount of work necessary incremental builds. For example, let's consider an Android application. Building our app requires compiling our code, generating source files, and packaging static resources into the final APK. If we were to say, change one of our layout files, we don't want to have to compile our code again. That would be unnecessary. Gradle accomplishes this by tracking each task's inputs and outputs. Before each task is run, Gradle saves a snapshot of the inputs used by the task. If that particular task doesn't have any snap shots of its input yet, or if the inputs have changed, then Gradle will run the task again. Gradle additionally saves a snapshot of the outputs created by this task. The next time Gradle goes to run the same task, it compares the inputs to the snap shot it saved earlier. If the inputs match, Gradle then also checks the outputs. If the outputs haven't been messed with since the last time the task ran, then the task can be skipped. If the outputs have changed or are missing, then the task must run again. When Gradle determines that no work needs to be done and the task can be skipped, the task is said to be up-to-date.
+
+An important part of any build tool is the ability to avoid doing work that has already been done. Consider the process of compilation. Once your source files have been compiled, there should be no need to recompile them unless something has changed that affects the output, such as the modification of a source file or the removal of an output file. And compilation can take a significant amount of time, so skipping the step when it's not needed saves a lot of time
+
+Gradle supports this begavior out of the box through a feature it calls incremental build. You have almost certainly already seen it in action: it's active nearly ever time the UP-TO-DATE text appears next to the name of a task when you run a build.
+
+Task inputs and outputs
+
+In the most common case, a task takes some inputs and generates some outputs. If we use the compilation example from earlier, we can see that the source files are the inputs and, in the case of Java, the generated class files are the outputs. Other inputs might include things like whether debug information should be included.
 
 
 
